@@ -178,18 +178,30 @@ class Unflattener:
             backbone_blocks.append(last_predecessor_loc)
             
             # traverse upward from each backbone block to find all backbone blocks above it
+            # this is due to CALL instructions breaking up basic block into multiple ones
             while True:
                 curr_predecessor_block = self.asmcfg.loc_key_to_block(curr_predecessor_loc)
                 if curr_predecessor_block.lines[-1].name in ['JZ', 'JMP', 'JNZ']:
                     break
-                last_predecessor_loc = curr_predecessor_loc
-                backbone_blocks.append(last_predecessor_loc)
+                backbone_blocks.append(curr_predecessor_loc)
                 curr_predecessor_loc = self.asmcfg.predecessors(curr_predecessor_loc)[0]
             
         # add function's tail (block with no successor) to backbone blocks
         for block in self.asmcfg.blocks:
             if len(self.asmcfg.successors(block.loc_key)) == 0:
-                backbone_blocks.append(block.loc_key)
+                last_tail_loc = block.loc_key
+                backbone_blocks.append(last_tail_loc)
+                
+                # traverse upward from each backbone block to find all backbone blocks above it
+                # this is due to CALL instructions breaking up basic block into multiple ones
+                curr_predecessor_tail_loc = self.asmcfg.predecessors(last_tail_loc)[0]
+                while True:
+                    self.print_block(curr_predecessor_tail_loc)
+                    curr_predecessor_tail_block = self.asmcfg.loc_key_to_block(curr_predecessor_tail_loc)
+                    if curr_predecessor_tail_block.lines[-1].name in ['JZ', 'JMP', 'JNZ']:
+                        break
+                    backbone_blocks.append(curr_predecessor_tail_loc)
+                    curr_predecessor_tail_loc = self.asmcfg.predecessors(curr_predecessor_tail_loc)[0]
 
         return backbone_blocks
 
