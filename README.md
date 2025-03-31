@@ -76,7 +76,8 @@ Below you can see the control flow graph (CFG) before and after deobfuscation:
 *Figure 1: Obfuscated CFG*
 
 ![Obfuscated CFG](./images/deobfuscated.jpg)
-*Figure 1: Deobfuscated CFG*
+
+*Figure 2: Deobfuscated CFG*
 
 These images are from deobfuscating function ```target_function``` from the sample [CFF_full.bin](./samples/CFF_full.bin).
 
