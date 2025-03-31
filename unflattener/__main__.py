@@ -25,12 +25,12 @@ def main() -> None:
             if unflat_engine.unflat(target_address):
                 logger.info("Generate patch for " + hex(target_address))
                 patches, dinterval = unflat_engine.generate_patch(target_address)
+                unflat_engine.apply_patches([(patches, dinterval)], args.output)
+                logger.info("Patch successfully. Deobfuscated binary is written to {}".format(args.output))
             else:
                 logger.info("Function {} is not flattened".format(hex(target_address)))
         except:
             logger.info("Fail to unflat function {}".format(hex(target_address)))
-        unflat_engine.apply_patches([(patches, dinterval)], args.output)
-        logger.info("Patch successfully. Deobfuscated binary is written to {}".format(args.output))
     else:
         unflat_engine.unflat_follow_calls(target_address, args.output)
         

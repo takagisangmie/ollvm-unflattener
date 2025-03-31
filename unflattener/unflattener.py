@@ -33,6 +33,14 @@ def calc_flattening_score(asm_graph: AsmCFG) -> float:
     score = 0.0
     # walk over all entry nodes in the graph
     for head in asm_graph.heads_iter():
+        # since miasm breaks basic block into multiple ones separated by CALL instruction
+        # need to move this head to the final successor whose last instruction is not a CALL instruction
+        # basically the tail of this head block
+        skipped_head_loc_count = 0
+        while asm_graph.loc_key_to_block(head).lines[-1].name == 'CALL':
+            skipped_head_loc_count += 1
+            head = asm_graph.successors(head)[0]
+        
         # compute dominator tree
         dominator_tree = asm_graph.compute_dominator_tree(head)
         # walk over all basic blocks
@@ -46,7 +54,7 @@ def calc_flattening_score(asm_graph: AsmCFG) -> float:
             if not any([b in dominated for b in asm_graph.predecessors(block_key)]):
                 continue
             # calculate relation of dominated blocks to the blocks in the graph
-            score = max(score, len(dominated)/len(asm_graph.nodes()))
+            score = max(score, len(dominated)/(len(asm_graph.nodes()) - skipped_head_loc_count))
     return score
 
 class Unflattener:
