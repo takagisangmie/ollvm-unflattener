@@ -11,7 +11,7 @@ This tool:
 - Generates a deobfuscated binary with the original control flow restored
 - Supports multi-layered function deobfuscation by following calls made by the target function using breadth-first search (BFS)
 
-This project is inspired by [MODeflattener](https://github.com/mrT4ntr4/MODeflattener) and the awesome work from [Quarkslab](https://blog.quarkslab.com/deobfuscation-recovering-an-ollvm-protected-program.html)! Unlikee **MODeflattener** that solves CFF deobfuscation with a static approach, this project utilitizes Miasm's symbolic execution engine to execute and recover the original control flow. 
+This project is inspired by [MODeflattener](https://github.com/mrT4ntr4/MODeflattener) and the awesome work from [Quarkslab](https://blog.quarkslab.com/deobfuscation-recovering-an-ollvm-protected-program.html)! Unlike **MODeflattener** that solves CFF deobfuscation with a static approach, this project utilitizes Miasm's symbolic execution engine to execute and recover the original control flow. 
 
 ## Installation
 
@@ -25,8 +25,6 @@ This project is inspired by [MODeflattener](https://github.com/mrT4ntr4/MODeflat
 ```bash
 git clone https://github.com/cdong1012/ollvm-unflattener.git
 cd ollvm-unflattener
-pip install -r requirements.txt
-
 ```
 
 2. Install required dependencies:
@@ -82,7 +80,7 @@ Below you can see the control flow graph (CFG) before and after deobfuscation:
 These images are from deobfuscating function ```target_function``` from the sample [CFF_full.bin](./samples/CFF_full.bin).
 
 ## Limitations
-- The tool currently supports x86 only architectures
+- The tool currently supports x86 only
 - I only tested this in x86 Linux binaries. Might need to tweak stuff for Windows PE
 
 ## Acknowledgements
