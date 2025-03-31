@@ -60,10 +60,10 @@ python unflattener -i <input file> -o <output file> -t <target function addresss
 
 ```bash
 # Deobfuscate a single function
-python unflattener.py -i ./samples/CFF.bin -o ./samples/deob_CFF.bin -t 0x80491A0
+python unflattener -i ./samples/CFF.bin -o ./samples/deob_CFF.bin -t 0x80491A0
 
 # Deobfuscate 0x8049E00 and follows all of its calls
-python unflattener.py -i ./samples/CFF_full.bin -o ./samples/deob_CFF_full.bin -t 0x8049E00 -a
+python unflattener -i ./samples/CFF_full.bin -o ./samples/deob_CFF_full.bin -t 0x8049E00 -a
 ```
 
 ## Results
