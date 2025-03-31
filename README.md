@@ -25,8 +25,6 @@ This project is inspired by [MODeflattener](https://github.com/mrT4ntr4/MODeflat
 ```bash
 git clone https://github.com/cdong1012/ollvm-unflattener.git
 cd ollvm-unflattener
-pip install -r requirements.txt
-
 ```
 
 2. Install required dependencies:
