@@ -80,7 +80,7 @@ Below you can see the control flow graph (CFG) before and after deobfuscation:
 These images are from deobfuscating function ```target_function``` from the sample [CFF_full.bin](./samples/CFF_full.bin).
 
 ## Limitations
-- The tool currently supports x86 only architectures
+- The tool currently supports x86 only
 - I only tested this in x86 Linux binaries. Might need to tweak stuff for Windows PE
 
 ## Acknowledgements
