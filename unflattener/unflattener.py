@@ -16,6 +16,9 @@ import graphviz
 from miasm.arch.x86.arch import instruction_x86, mn_x86
 from miasm.arch.x86.disasm import dis_x86_32
 from miasm.core.interval import interval
+from miasm.loader.elf_init import ELF
+from miasm.loader.pe_init import PE
+
 
 def calc_flattening_score(asm_graph: AsmCFG) -> float:
     """Function to calculate flatenning score
@@ -85,10 +88,21 @@ class Unflattener:
             bool: Original CFG is recovered
         """
         
-        self.text_section_va = self.container.executable.getsectionbyvad(target_address).sh
+        # get text section range & binary base virtual address
+        if isinstance(self.container.executable, PE):
+            text_section_Shdr = self.container.executable.getsectionbyvad(target_address)
+            self.binary_base_va = self.container.executable.NThdr.ImageBase + (text_section_Shdr.addr - text_section_Shdr.offset)
+            self.text_section_range = {'lower': self.container.executable.NThdr.ImageBase + text_section_Shdr.addr,
+                                       'upper': self.container.executable.NThdr.ImageBase + text_section_Shdr.addr + text_section_Shdr.size}
+        elif isinstance(self.container.executable, ELF):
+            text_section_Shdr = self.container.executable.getsectionbyvad(target_address).sh
+            self.binary_base_va = text_section_Shdr.addr - text_section_Shdr.offset
+            
+            self.text_section_range = {'lower': text_section_Shdr.addr,
+                                       'upper': text_section_Shdr.addr + text_section_Shdr.size}
+        else:
+            raise Exception('Unsupported binary type')
 
-        self.binary_base = self.text_section_va.addr - self.text_section_va.offset
-        
         self.asmcfg: AsmCFG = self.mdis.dis_multiblock(target_address)
         self.lifter = self.machine.lifter_model_call(self.mdis.loc_db)
         self.ircfg: IRCFG = self.lifter.new_ircfg_from_asmcfg(self.asmcfg)
@@ -148,7 +162,7 @@ class Unflattener:
         Args:
             loc_key (LocKey): Location key
         """
-        logger.debug('{} {}'.format(str(loc_key), str(self.asmcfg.loc_key_to_block(loc_key))))
+        print('{} {}'.format(str(loc_key), str(self.asmcfg.loc_key_to_block(loc_key))))
 
     def to_loc_key(self, expr) -> LocKey:
         """Convert an expression into a location key
@@ -204,7 +218,7 @@ class Unflattener:
                 # this is due to CALL instructions breaking up basic block into multiple ones
                 curr_predecessor_tail_loc = self.asmcfg.predecessors(last_tail_loc)[0]
                 while True:
-                    self.print_block(curr_predecessor_tail_loc)
+                    
                     curr_predecessor_tail_block = self.asmcfg.loc_key_to_block(curr_predecessor_tail_loc)
                     if curr_predecessor_tail_block.lines[-1].name in ['JZ', 'JMP', 'JNZ']:
                         break
@@ -245,7 +259,7 @@ class Unflattener:
         dispatcher_block = self.asmcfg.loc_key_to_block(dispatcher_loc)
         state_var_expr = dispatcher_block.lines[0].get_args_expr()[1]
         logger.debug('State var: ' + str(state_var_expr))
-        
+
         # symbols for symbex
         init_symbols =  {}
         for i, r in enumerate(all_regs_ids):
@@ -312,10 +326,10 @@ class Unflattener:
                 if curr_block is not None:
                     last_instruction = curr_block.lines[-1]
                     if last_instruction.name == 'CALL':
-                        destination_loc = symbex_engine.eval_exprloc(last_instruction.args[0])
+                        destination_loc = symbex_engine.eval_expr(last_instruction.args[0])
                         destination_loc = int(destination_loc)
                         # only follows calls that are in the .text section only (avoid library calls)
-                        if self.text_section_va.addr <= destination_loc <= self.text_section_va.addr + self.text_section_va.size:
+                        if self.text_section_range['lower'] <= destination_loc <= self.text_section_range['upper']:
                             self.flatten_func_queue.append(int(destination_loc))
 
                 
@@ -538,12 +552,12 @@ class Unflattener:
         for func_patch, func_interval in patches_list:
             # NOP out
             for i in range(func_interval.hull()[0], func_interval.hull()[1]):
-                out_file.seek(i - self.binary_base)
+                out_file.seek(i - self.binary_base_va)
                 out_file.write(b"\xCC")
                 
             # Apply patches
             for offset, data in viewitems(func_patch):
-                out_file.seek(offset - self.binary_base)
+                out_file.seek(offset - self.binary_base_va)
                 out_file.write(data)
 
         out_file.close()

@@ -29,8 +29,9 @@ def main() -> None:
                 logger.info("Patch successfully. Deobfuscated binary is written to {}".format(args.output))
             else:
                 logger.info("Function {} is not flattened".format(hex(target_address)))
-        except:
+        except Exception as e:
             logger.info("Fail to unflat function {}".format(hex(target_address)))
+            logger.info('Error {}'.format(str(e)))
     else:
         unflat_engine.unflat_follow_calls(target_address, args.output)
         
