@@ -264,7 +264,19 @@ class Unflattener:
             if 'CMOV' in instruction.name:
                 cmov_instruction = instruction
                 break
-                
+        
+        if curr_block.lines[-1].name == 'CALL':
+            # process call regularly but we reset RSP to RSP instead 
+            #   of an ExprMem depending on miasm's call_func_stack
+            #   basically overwriting the execution result of the CALL IR instruction.
+            #   Here, we assume that the CALL IR does not impact the stack pointer
+            result = symbex_engine.run_block_at(self.ircfg, loc_key)
+            if self.container.arch == 'x86_32':
+                symbex_engine.symbols[ExprId('ESP', 32)] = ExprId('ESP', 32)
+            elif self.container.arch == 'x86_64':
+                symbex_engine.symbols[ExprId('RSP', 64)] = ExprId('RSP', 64)
+            return result
+         
         # is an ollvm condition block if CMP instruction is followed by CMOVCC instruction
         if cmov_instruction is not None and cmp_instruction is not None\
             and curr_block.lines.index(cmp_instruction) < curr_block.lines.index(cmov_instruction):
@@ -290,7 +302,7 @@ class Unflattener:
                             #       and return ExprInt for the address
                             #   We don't want this as we want to still split the IR path into two
                             #       so we have to get the ExprCond directly from the assign block
-                            cmov_cond_expr = assign_block.values()[0]
+                            cmov_cond_expr = assign_block.values()[-1]
                             
                             # example: CMOVNZ -> JNZ
                             if 'CMOVN' in cmov_instruction.name:
