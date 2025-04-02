@@ -265,13 +265,6 @@ class Unflattener:
                 cmov_instruction = instruction
                 break
                 
-        # if asm block has CMP/TEST followed by CMOV
-        # it's an ollvm condition block
-        # -> curr_loc = symbex_engine.run_block_at(self.ircfg, curr_loc
-        # -> keep exec until instruction is CMOVZ
-        # -> instead of run_block_at, we just reeturn assignblk.values() (which is the correct cond)
-        # -> this will bypass the evaluation, forcing the cond paths to split
-        
         # is an ollvm condition block if CMP instruction is followed by CMOVCC instruction
         if cmov_instruction is not None and cmp_instruction is not None\
             and curr_block.lines.index(cmp_instruction) < curr_block.lines.index(cmov_instruction):
