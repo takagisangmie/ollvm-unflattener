@@ -78,6 +78,7 @@ class Unflattener:
         self.mdis = self.machine.dis_engine(self.container.bin_stream, loc_db=self.loc_db)
         self.original_filename: str = filename
         self.flatten_func_queue: list = []
+        self.flatten_func_encountered: list = []
     
     def unflat(self, target_address: int) -> bool:
         """Unflatten the CFG of a function
@@ -238,6 +239,81 @@ class Unflattener:
             patched_jmp_insn.offset = curr_block.lines[-1].offset + curr_block.lines[-1].l
             curr_block.lines.append(patched_jmp_insn)
 
+    def symbex_block(self, symbex_engine: SymbolicExecutionEngine, loc_key: LocKey) -> Expr:
+        """symbolically executing a block
+
+        Args:
+            symbex_engine (SymbolicExecutionEngine): Symbolic execution engine
+            loc_key (LocKey): Location key to execute
+
+        Returns:
+            Expr: Result symbolic expression
+        """
+        curr_block = self.asmcfg.loc_key_to_block(loc_key)
+        
+        if curr_block is None:
+            return symbex_engine.run_block_at(self.ircfg, loc_key)
+        
+        # retrieve the cmp/test instruction & cmovcc instruction
+        cmp_instruction = None
+        cmov_instruction = None
+        
+        for instruction in curr_block.lines:
+            if instruction.name in ['CMP', 'TEST']:
+                cmp_instruction = instruction
+            if 'CMOV' in instruction.name:
+                cmov_instruction = instruction
+                break
+                
+        # if asm block has CMP/TEST followed by CMOV
+        # it's an ollvm condition block
+        # -> curr_loc = symbex_engine.run_block_at(self.ircfg, curr_loc
+        # -> keep exec until instruction is CMOVZ
+        # -> instead of run_block_at, we just reeturn assignblk.values() (which is the correct cond)
+        # -> this will bypass the evaluation, forcing the cond paths to split
+        
+        # is an ollvm condition block if CMP instruction is followed by CMOVCC instruction
+        if cmov_instruction is not None and cmp_instruction is not None\
+            and curr_block.lines.index(cmp_instruction) < curr_block.lines.index(cmov_instruction):
+                curr_loc = loc_key
+
+                while True:
+                    # continue to simulate to check each IR block
+                    # this is because condition-generating instructions (idiv, cmov)
+                    #  split a single asm block into multiple IR blocks
+                    curr_ir_block: IRBlock = self.ircfg.get_block(curr_loc)
+                    if curr_ir_block is None:
+                        return symbex_engine.run_block_at(self.ircfg, loc_key)
+                    
+                    for assign_block in curr_ir_block:
+                        # once found the IR assign block for the CMOV instruction
+                        if 'CMOV' in assign_block.instr.name:
+                            # symbex the block as normal
+                            symbex_engine.run_block_at(self.ircfg, curr_loc)
+                            
+                            # NOTE: We don't return the condition produced by symbex_engine.run_block_at here.
+                            #   This is because if the condition is deterministic(in a for loop for example)
+                            #       symbex_engine.run_block_at will evaluate the cond automatically
+                            #       and return ExprInt for the address
+                            #   We don't want this as we want to still split the IR path into two
+                            #       so we have to get the ExprCond directly from the assign block
+                            cmov_cond_expr = assign_block.values()[0]
+                            
+                            # example: CMOVNZ -> JNZ
+                            if 'CMOVN' in cmov_instruction.name:
+                                return cmov_cond_expr.copy()
+                            
+                            # example: CMOVZ -> JZ 
+                            # need to flip the condition src fields
+                            return ExprCond(cmov_cond_expr._cond.copy(),
+                                cmov_cond_expr._src2.copy(),
+                                cmov_cond_expr._src1.copy())
+                    curr_loc = symbex_engine.run_block_at(self.ircfg, curr_loc)
+                    continue
+        else:
+            # just a regular block, symbex normally
+            return symbex_engine.run_block_at(self.ircfg, loc_key) 
+                    
     def recover_CFG(self, target_address: int):
         """Recover the function's CFG 
 
@@ -327,14 +403,17 @@ class Unflattener:
                     last_instruction = curr_block.lines[-1]
                     if last_instruction.name == 'CALL':
                         destination_loc = symbex_engine.eval_expr(last_instruction.args[0])
-                        destination_loc = int(destination_loc)
-                        # only follows calls that are in the .text section only (avoid library calls)
-                        if self.text_section_range['lower'] <= destination_loc <= self.text_section_range['upper']:
-                            self.flatten_func_queue.append(int(destination_loc))
-
+                        
+                        if isinstance(destination_loc, ExprInt):
+                            destination_loc = int(destination_loc)
+                            # only follows calls that are in the .text section only (avoid library calls)
+                            if self.text_section_range['lower'] <= destination_loc <= self.text_section_range['upper']:
+                                if destination_loc not in self.flatten_func_encountered:
+                                    self.flatten_func_queue.append(int(destination_loc))
+                                    self.flatten_func_encountered.append(destination_loc)
                 
                 # symbex block at current loc_key
-                symbex_expr_result = symbex_engine.run_block_at(self.ircfg, curr_loc)
+                symbex_expr_result = self.symbex_block(symbex_engine, curr_loc)
                 
                 # if reach the end (ret), stop this path traversal
                 if symbex_expr_result is None:

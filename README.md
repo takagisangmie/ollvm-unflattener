@@ -58,10 +58,12 @@ python unflattener -i <input file> -o <output file> -t <target function addresss
 
 ```bash
 # Deobfuscate a single function
-python unflattener -i ./samples/CFF.bin -o ./samples/deob_CFF.bin -t 0x80491A0
+python unflattener -i ./samples/linux/CFF.bin -o ./samples/linux/deob_CFF.bin -t 0x80491A0
+python unflattener -i .\samples\win\CFF_win.exe -o .\samples\win\deob_CFF_win.bin -t 0x401600
 
 # Deobfuscate 0x8049E00 and follows all of its calls
-python unflattener -i ./samples/CFF_full.bin -o ./samples/deob_CFF_full.bin -t 0x8049E00 -a
+python unflattener -i ./samples/linux/CFF_full.bin -o ./samples/linux/deob_CFF_full.bin -t 0x8049E00 -a
+python unflattener -i ./samples/win/CFF_win_full.bin -o ./samples/win/deob_CFF_full.bin -t 0x401F10 -a
 ```
 
 ## Results
@@ -77,11 +79,10 @@ Below you can see the control flow graph (CFG) before and after deobfuscation:
 
 *Figure 2: Deobfuscated CFG*
 
-These images are from deobfuscating function ```target_function``` from the sample [CFF_full.bin](./samples/CFF_full.bin).
+These images are from deobfuscating function ```target_function``` from the sample [CFF_full.bin](./samples/linux/CFF_full.bin).
 
 ## Limitations
-- The tool currently supports x86 only
-- I only tested this in x86 Linux binaries. Might need to tweak stuff for Windows PE
+- The tool currently supports Windows PE & Linux ELF (x86)
 
 ## Acknowledgements
 
