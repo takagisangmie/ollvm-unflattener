@@ -270,11 +270,13 @@ class Unflattener:
             #   of an ExprMem depending on miasm's call_func_stack
             #   basically overwriting the execution result of the CALL IR instruction.
             #   Here, we assume that the CALL IR does not impact the stack pointer
+            original_rsp = symbex_engine.symbols[ExprId('RSP', 64)]
+            original_esp = symbex_engine.symbols[ExprId('ESP', 32)]
             result = symbex_engine.run_block_at(self.ircfg, loc_key)
             if self.container.arch == 'x86_32':
-                symbex_engine.symbols[ExprId('ESP', 32)] = ExprId('ESP', 32)
+                symbex_engine.symbols[ExprId('ESP', 32)] = original_esp
             elif self.container.arch == 'x86_64':
-                symbex_engine.symbols[ExprId('RSP', 64)] = ExprId('RSP', 64)
+                symbex_engine.symbols[ExprId('RSP', 64)] = original_rsp
             return result
          
         # is an ollvm condition block if CMP instruction is followed by CMOVCC instruction
