@@ -59,7 +59,6 @@ class RewriteInstruction:
         result = hex(self.old_offset) + ': ' + self.instruction
         result += '\n\tNew offset: ' + hex(self.new_offset) 
         return result
-
  
 class BinaryRewriter:
     JMP_INSTRUCTION_DEFAULT_LEN = 6

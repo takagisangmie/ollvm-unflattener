@@ -11,7 +11,6 @@ from miasm.arch.ppc.regs import *
 from miasm.analysis.simplifier import *
 from miasm.expression.expression import *
 from miasm.ir.symbexec import SymbolicExecutionEngine
-from miasm.core.asmblock import asm_resolve_final, AsmConstraintTo, AsmConstraintNext, AsmConstraint
 import graphviz
 from miasm.arch.x86.arch import instruction_x86, mn_x86
 from miasm.arch.x86.disasm import dis_x86_32

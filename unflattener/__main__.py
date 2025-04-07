@@ -1,7 +1,7 @@
 import unflattener
 import argparse
 import logging as logger
-import binrewrite
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog='unflattener', description='Python program to unflatten binaries obfuscated by ollvm')
     parser.add_argument('-i', '--input', type=str, help='Obfuscated binary path', required=True)

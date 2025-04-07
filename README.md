@@ -10,7 +10,7 @@ This tool:
 - Reconstructs the original control flow of an obfuscated function by identifying and connecting basic blocks
 - Generates a deobfuscated binary with the original control flow restored
 - Supports multi-layered function deobfuscation by following calls made by the target function using breadth-first search (BFS)
-- Supports deobfuscation for Windows & Linux binaries for both x86 and x64 architectures
+- Supports deobfuscation for Windows & Linux binaries (x86 and x64 architectures)
 
 This project is inspired by [MODeflattener](https://github.com/mrT4ntr4/MODeflattener) and the awesome work from [Quarkslab](https://blog.quarkslab.com/deobfuscation-recovering-an-ollvm-protected-program.html)! Unlike **MODeflattener** that solves CFF deobfuscation with a static approach, this project utilitizes Miasm's symbolic execution engine to execute and recover the original control flow. 
 
