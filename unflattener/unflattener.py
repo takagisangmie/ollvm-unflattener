@@ -229,17 +229,6 @@ class Unflattener:
 
         return backbone_blocks
 
-    def add_jump_to_next_state(self, loc_key: LocKey, jump_type: str, jump_dest: int, del_last_insn: bool):
-        curr_block = self.asmcfg.loc_key_to_block(loc_key)
-        patched_jmp_insn = mn_x86.fromstring('{} {}'.format(jump_type, jump_dest), self.asmcfg.loc_db, 32)
-        patched_jmp_insn.l = len(mn_x86.asm(patched_jmp_insn, self.asmcfg.loc_db)[0])
-        if del_last_insn:
-            patched_jmp_insn.offset = curr_block.lines[-1].offset
-            curr_block.lines[-1] = patched_jmp_insn
-        else:
-            patched_jmp_insn.offset = curr_block.lines[-1].offset + curr_block.lines[-1].l
-            curr_block.lines.append(patched_jmp_insn)
-
     def symbex_block(self, symbex_engine: SymbolicExecutionEngine, loc_key: LocKey) -> Expr:
         """symbolically executing a block
 
@@ -267,17 +256,21 @@ class Unflattener:
                 break
         
         if curr_block.lines[-1].name == 'CALL':
-            # process call regularly but we reset RSP to RSP instead 
+            # process call regularly but we reset RSP/RBP to old RSP/RBP instead 
             #   of an ExprMem depending on miasm's call_func_stack
             #   basically overwriting the execution result of the CALL IR instruction.
             #   Here, we assume that the CALL IR does not impact the stack pointer
             original_rsp = symbex_engine.symbols[ExprId('RSP', 64)]
+            original_rbp = symbex_engine.symbols[ExprId('RBP', 64)]
             original_esp = symbex_engine.symbols[ExprId('ESP', 32)]
+            original_ebp = symbex_engine.symbols[ExprId('EBP', 32)]
             result = symbex_engine.run_block_at(self.ircfg, loc_key)
             if self.container.arch == 'x86_32':
                 symbex_engine.symbols[ExprId('ESP', 32)] = original_esp
+                symbex_engine.symbols[ExprId('EBP', 32)] = original_ebp
             elif self.container.arch == 'x86_64':
                 symbex_engine.symbols[ExprId('RSP', 64)] = original_rsp
+                symbex_engine.symbols[ExprId('RBP', 64)] = original_rbp
             return result
          
         # is an ollvm condition block if CMP instruction is followed by CMOVCC instruction

@@ -2,6 +2,8 @@ from collections import defaultdict
 from miasm.core.asmblock import AsmCFG, AsmBlock
 from miasm.ir.symbexec import SymbolicExecutionEngine
 from keystone import Ks, KS_ARCH_X86, KS_MODE_32, KS_MODE_64
+from miasm.expression.expression import ExprLoc
+import re
 
 class RewriteInstruction:
     def __init__(self, instruction: str, old_offset: int, new_offset: int):
@@ -16,9 +18,38 @@ class RewriteInstruction:
         self.old_offset: int = old_offset
         self.new_offset: int = new_offset
         # assemble the new instruction bytes
-        instruction_encoding = BinaryRewriter.KS.asm(instruction, new_offset)[0]
-        self.asm: bytes = bytes(instruction_encoding)
         
+        if BinaryRewriter.KS._mode == KS_MODE_64 and '[RIP ' in  instruction:
+            # handlee x64 RIP-addressing
+            self.fix_RIP_addressing()
+        
+        instruction_encoding = BinaryRewriter.KS.asm(self.instruction, new_offset)[0]
+        self.asm: bytes = bytes(instruction_encoding)
+    
+    def fix_RIP_addressing(self):
+        """Fix offset for RIP-addressing instruction
+        Example: lea rcx, [rip + 0x1234]
+        keystone does not automatically calculate the RIP for us 
+        and will assemble this wrong with our relocate address
+        """
+        rip_pattern_match = re.search(BinaryRewriter.X64_RIP_REGEX_PATTERN, self.instruction)
+        assert rip_pattern_match is not None
+        relative_offset = int(rip_pattern_match.group().replace('[RIP ', '').replace(']', '').replace(' ', ''), 16)
+        
+        instruction_encoding = BinaryRewriter.KS.asm(self.instruction, self.old_offset)[0]
+        old_RIP = self.old_offset + len(instruction_encoding)
+        target_offset = old_RIP + relative_offset
+        new_RIP = self.new_offset + len(instruction_encoding)
+        
+        new_relative_offset = target_offset - new_RIP
+        
+        if new_relative_offset >= 0:
+            rip_addressing_field = '[RIP + {}]'.format(hex(new_relative_offset))
+        else:
+            rip_addressing_field = '[RIP - {}]'.format(hex(-new_relative_offset))
+            
+        self.instruction = self.instruction.replace(rip_pattern_match.group(), rip_addressing_field)
+    
     def __str__(self) -> str:
         """Get the string representation of the rewrite instruction
 
@@ -33,6 +64,8 @@ class RewriteInstruction:
 class BinaryRewriter:
     JMP_INSTRUCTION_DEFAULT_LEN = 6
     KS: Ks = None
+    X64_RIP_REGEX_PATTERN = r'\[RIP [\+\-] 0x(\d|[A-F])+\]'
+    
     def __init__(self, asmcfg: AsmCFG, arch: str):
         """BinaryRewriter constructor
 
@@ -111,8 +144,9 @@ class BinaryRewriter:
                         instruction_str = str(instruction)
                         if instruction.name == 'CALL':
                             # has to resolve the call destination from loc key
-                            call_dst = int(self.symbex_engine.eval_expr(instruction.args[0]))
-                            instruction_str = 'CALL {}'.format(hex(call_dst))
+                            if isinstance(instruction.args[0], ExprLoc):
+                                call_dst = int(self.symbex_engine.eval_exprloc(instruction.args[0]))
+                                instruction_str = 'CALL {}'.format(hex(call_dst))
                         
                         # relocate the instruction
                         self.rewrite_instructions[curr_reloc_address] = RewriteInstruction(instruction_str, instruction.offset, curr_reloc_address)
@@ -197,7 +231,9 @@ class BinaryRewriter:
             
             # get instruction patch
             instruction_patch = None
-            if reloc_instruction.instruction[0] == 'J':
+            
+            # if is a JMP/JCC we manually add
+            if reloc_instruction.old_offset == -1:
                 # need to recalculate destination
                 # because the destination of the JMP/JCC instruction has been relocated
                 jump_type, destination = instruction_str.split(' ')
