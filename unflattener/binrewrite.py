@@ -118,6 +118,9 @@ class BinaryRewriter:
         while len(process_queue) != 0:
             curr_state_val = process_queue.pop()
             while True:
+                if curr_state_val in processed_state_val_list:
+                    # Do not process the same state twice
+                    break
                 processed_state_val_list.append(curr_state_val)
                 next_state_vals = self.state_order_map[curr_state_val]
                 
