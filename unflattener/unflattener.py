@@ -18,7 +18,7 @@ from miasm.arch.x86.disasm import dis_x86_32
 from miasm.core.interval import interval
 from miasm.loader.elf_init import ELF
 from miasm.loader.pe_init import PE
-
+from binrewrite import BinaryRewriter
 
 def calc_flattening_score(asm_graph: AsmCFG) -> float:
     """Function to calculate flatenning score
@@ -80,13 +80,13 @@ class Unflattener:
         self.flatten_func_queue: list = []
         self.flatten_func_encountered: list = []
     
-    def unflat(self, target_address: int) -> bool:
+    def unflat(self, target_address: int) -> tuple[bytes, interval]:
         """Unflatten the CFG of a function
 
         Args:
             target_address (int): Target function address
         Returns:
-            bool: Original CFG is recovered
+            tuple[bytes, interval]: Function patch & function interval
         """
         
         # get text section range & binary base virtual address
@@ -110,21 +110,24 @@ class Unflattener:
         score = calc_flattening_score(self.asmcfg)
         
         if score < 0.9:
-            return False
-        self.recover_CFG(target_address)
-        return True
+            return (None, None)
+        patch = self.recover_CFG(target_address)
+        func_interval = interval(block.get_range() for block in self.asmcfg.blocks)
+        return (patch, func_interval)
     
-    def unflat_follow_calls(self, target_address: int, out_filename: str):
+    def unflat_follow_calls(self, target_address: int, out_filename: str) -> list[tuple[bytes, interval]]:
         """Unflat the target function & all calls to unflat other obfuscated functions 
 
         Args:
             target_address (int): Target function address
             out_filename (str): Deobfuscated output path
+        Returns:
+            list[tuple[bytes, interval]]: List of function patch & function interval
         """
-        self.flatten_func_queue = [target_address]
-        processed_flatten_func_list = []
+        self.flatten_func_queue: list[int] = [target_address]
+        processed_flatten_func_list: list[int] = []
         
-        patches_list = []
+        patch_data_list: list[tuple[bytes, interval]] = []
         while len(self.flatten_func_queue) != 0:
             flatten_func_addr = self.flatten_func_queue.pop()
             
@@ -134,17 +137,15 @@ class Unflattener:
             
             logger.info("Unflattening function {}".format(hex(flatten_func_addr)))
             try:
-                if self.unflat(flatten_func_addr):
-                    logger.info("Generate patch for " + hex(flatten_func_addr))
-                    func_patch, func_interval = self.generate_patch(flatten_func_addr)
-                    patches_list.append((func_patch, func_interval))
-                    processed_flatten_func_list.append(flatten_func_addr)
+                patch, func_interval = self.unflat(flatten_func_addr)
+                if patch is not None:
+                    logger.info("Generate patch for {} successfully".format(hex(target_address)))
+                    patch_data_list.append((patch, func_interval))
                 else:
-                    logger.info("Function {} is not flattened".format(hex(flatten_func_addr)))
+                    logger.info("Function {} is not flattened".format(hex(target_address)))
             except:
                 logger.info("Fail to unflat function {}".format(hex(flatten_func_addr)))
-        self.apply_patches(patches_list, out_filename)
-        logger.info("Patch successfully. Deobfuscated binary is written to {}".format(out_filename))
+        return patch_data_list
     
     def render(self, dot_filename: str, image_filename: str):
         """Render the function's CFG into a DOT and PNG file
@@ -471,6 +472,7 @@ class Unflattener:
         backbone_loc_list = [loc for sublist in state_to_lockey_map.values() for loc in sublist]
         
         # add prologue blocks to backbone list
+        state_order_map[0].append(first_state_val)
         prologue_tail_loc = None
         for block_loc in self.asmcfg.predecessors(dispatcher_loc):
             # head block is the other predecessor of dispatcher beside the predispatcher
@@ -480,17 +482,22 @@ class Unflattener:
             # add head to backbone
             prologue_tail_loc = block_loc
             backbone_loc_list.append(prologue_tail_loc)
+            state_to_lockey_map[0].append(prologue_tail_loc)
             
             # add all prologue blocks above the prologue tail
             curr_prologue_loc = prologue_tail_loc
             while len(self.asmcfg.predecessors(curr_prologue_loc)) != 0:
                 prev_prologue_block = self.asmcfg.predecessors(curr_prologue_loc)[0]
                 backbone_loc_list.append(prev_prologue_block)
-                # re-add edge with cst_next
-                self.asmcfg.del_edge(prev_prologue_block, curr_prologue_loc)
-                self.asmcfg.add_edge(prev_prologue_block, curr_prologue_loc, AsmConstraintNext(curr_prologue_loc))
+                state_to_lockey_map[0].append(prev_prologue_block)
                 curr_prologue_loc = prev_prologue_block
             break
+        
+        # state value 0 is associated with the prologue blocks
+        
+        # since we add from the prologue tail up to the prologue head
+        # need to flip the order before we reorder the CFG
+        state_to_lockey_map[0] = state_to_lockey_map[0][::-1]
         
         # irrelevant blocks are original blocks that are not a backbone block
         irrelevant_loc_list = [original_block.loc_key for original_block in self.asmcfg.blocks if original_block.loc_key not in backbone_loc_list]
@@ -498,153 +505,36 @@ class Unflattener:
         # delete all irrelevant blocks
         for loc_key in irrelevant_loc_list:
             self.asmcfg.del_block(self.asmcfg.loc_key_to_block(loc_key))
-
-        for loc_list in state_to_lockey_map.values():
-            for i in range(0, len(loc_list) - 1):
-                self.asmcfg.del_edge(loc_list[i], loc_list[i + 1])
-                # re-add edge with cst_next
-                self.asmcfg.add_edge(loc_list[i], loc_list[i + 1], AsmConstraintNext(loc_list[i + 1]))
-
-        # start adding edges between backbones
-        # first, add edge from head -> the first state block
-        # add edge from head block to the head loc_key of the state
-        curr_state_blocks = state_to_lockey_map[first_state_val]
-        curr_state_val = first_state_val
-        state_head_loc = curr_state_blocks[0]
-        state_tail_loc = curr_state_blocks[-1]
-
-        self.asmcfg.add_edge(prologue_tail_loc, state_head_loc, AsmConstraintNext(state_head_loc))
-        # get offset of the loc_key to the state head block
-        jump_dst = hex(self.asmcfg.loc_db.get_location_offset(state_head_loc))
         
-        # add JMP <head of next state> to the end of the head block
-        self.add_jump_to_next_state(prologue_tail_loc, 'JMP', jump_dst, False)
-
-        # queue: list of tuple (current state value, loc_key for current tail block)
-        process_queue = [(first_state_val, state_tail_loc)]
-        processed_state_val_list = []
-
-        while len(process_queue) != 0:
-            curr_state_val, curr_state_tail_loc = process_queue.pop()
-            while True:
-                # if we already processed this state, skip
-                if curr_state_val in processed_state_val_list:
-                    break
-                processed_state_val_list.append(curr_state_val)
-                
-                # get the next states
-                next_state_vals = state_order_map[curr_state_val]
-                
-                if len(next_state_vals) == 1:
-                    # only one next state (non conditional)
-                    next_state_val = next_state_vals[0]
-                    curr_state_tail_block: AsmBlock = self.asmcfg.loc_key_to_block(curr_state_tail_loc)
-                    
-                    # last instruction of the tail block should be a JMP to predispatcher
-                    assert curr_state_tail_block.lines[-1].name == 'JMP'
-
-                    if next_state_val in state_to_lockey_map:
-                        # first item is the loc_key to the head block of that statee
-                        next_state_head_loc = state_to_lockey_map[next_state_val][0]
-                        jump_dst = self.asmcfg.loc_db.get_location_offset(next_state_head_loc)
-                        
-                        # add an edge from the current tail to the next head
-                        self.asmcfg.add_edge(curr_state_tail_loc, next_state_head_loc, AsmConstraintNext(next_state_head_loc))
-                        
-                        # delete the JMP <dispatcher> instruction & add a JMP instruction to the current tail
-                        self.add_jump_to_next_state(curr_state_tail_loc, 'JMP', jump_dst, True)
-                elif len(next_state_vals) == 2:
-                    # processing conditional
-                    true_state_val = next_state_vals[0]
-                    false_state_val = next_state_vals[1]
-                    
-                    # first, remove the CMOV instruction
-                    cond_block: AsmBlock = self.asmcfg.loc_key_to_block(curr_state_tail_loc)
-                    
-                    for i in range(len(cond_block.lines)):
-                        insn = cond_block.lines[i]
-                        if 'CMOV' in insn.name:
-                            cond_jump_type = insn.name.replace('CMOV', 'J')
-                            cond_block.lines.remove(insn)
-                            break
-                        
-                    # last instruction of the cond block should be a JMP to predispatcher
-                    assert(cond_block.lines[-1].name == 'JMP')
-                    
-                    if false_state_val in state_to_lockey_map:
-                        false_head_loc = state_to_lockey_map[false_state_val][0]
-                        false_dst = self.asmcfg.loc_db.get_location_offset(false_head_loc)
-                        
-                        # add edge from current tail to next false head
-                        self.asmcfg.add_edge(curr_state_tail_loc, false_head_loc, AsmConstraintTo(false_head_loc))
-                        
-                        # delete JMP <dispatchere> & add a JCC from current tail to next false head
-                        self.add_jump_to_next_state(curr_state_tail_loc, cond_jump_type, false_dst, True)
-                        
-                        next_state_val = false_state_val
-
-                    if true_state_val in state_to_lockey_map:
-                        true_head_loc = state_to_lockey_map[true_state_val][0]
-                        true_tail_loc = state_to_lockey_map[true_state_val][-1]
-                        true_dst = self.asmcfg.loc_db.get_location_offset(true_head_loc)
-                        
-                        # add edge from current tail to next true head
-                        self.asmcfg.add_edge(curr_state_tail_loc, true_head_loc, AsmConstraintNext(true_head_loc))
-                        
-                        # add a JMP from current tail to next false head
-                        self.add_jump_to_next_state(curr_state_tail_loc, 'JMP', true_dst, False)
-                        
-                        # stash the false state for later traversal
-                        process_queue.append((true_state_val, true_tail_loc))
-                    
-                # update curr state val
-                curr_state_val = next_state_val
-                curr_state_tail_loc = state_to_lockey_map[curr_state_val][-1]
-
-    def generate_patch(self, target_address: int) -> tuple[dict, interval]:
-        """Generate patches for an obfuscated function based on the recovered CFG
+        # init BinaryRewriter to reorder the CFG and generate a patch for rewriting
+        rewriter = BinaryRewriter(self.asmcfg, self.container.arch)
+        rewriter.init_CFF_data(state_order_map, state_to_lockey_map, symbex_engine)
+        rewriter.reorder_blocks(target_address)
+        return rewriter.generate_patch()
+    
+    def apply_patches(self, patch_data_list: list[tuple[bytes, interval]], out_filename: str):
+        """Applying patches to the deobfuscated output file
 
         Args:
-            target_address (int): Target function address
+            patch_data_list (list[tuple[bytes, interval]]): List of function patches & function intervals
+            out_filename (str): Deobfuscated output filename
 
         Returns:
-            dict: Patches (offset -> data)
-            interval: function interval
-        """
-        self.asmcfg.sanity_check()
-        head_loc = self.asmcfg.heads()[0]
-
-        self.asmcfg.loc_db.set_location_offset(head_loc, target_address)
-        
-        func_interval = interval(block.get_range() for block in self.asmcfg.blocks)
-
-        # generate patches
-        patches = asm_resolve_final(self.mdis.arch, self.asmcfg)
-        
-        return patches, func_interval
-    
-    def apply_patches(self, patches_list: List, out_filename: str):
-        """Apply patches to deobfuscate
-
-        Args:
-            patches_list (List): List of (func_patch, func_interval)
-            out_filename (str): Deobfuscated binary path
+            bool: _description_
         """
         out_file = open(out_filename, 'wb')
         in_file = open(self.original_filename, 'rb')
         out_file.write(in_file.read())
         in_file.close()
         
-        for func_patch, func_interval in patches_list:
-            # NOP out
+        for patch_data in patch_data_list:
+            patch, func_interval = patch_data
+            func_start = func_interval.hull()[0]
             for i in range(func_interval.hull()[0], func_interval.hull()[1]):
                 out_file.seek(i - self.binary_base_va)
                 out_file.write(b"\xCC")
-                
-            # Apply patches
-            for offset, data in viewitems(func_patch):
-                out_file.seek(offset - self.binary_base_va)
-                out_file.write(data)
-
+            out_file.seek(func_start - self.binary_base_va)
+            out_file.write(patch)
+        
         out_file.close()
     
