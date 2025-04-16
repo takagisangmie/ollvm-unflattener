@@ -37,6 +37,7 @@ The `requirements.txt` file includes:
 ```
 miasm
 graphviz
+keystone-engine
 ```
 
 ## Usage
