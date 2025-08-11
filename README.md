@@ -11,6 +11,7 @@ This tool:
 - Generates a deobfuscated binary with the original control flow restored
 - Supports multi-layered function deobfuscation by following calls made by the target function using breadth-first search (BFS)
 - Supports deobfuscation for Windows & Linux binaries (x86 and x64 architectures)
+- **NEW**: Supports Android ARM64 (aarch64) binaries
 
 This project is inspired by [MODeflattener](https://github.com/mrT4ntr4/MODeflattener) and the awesome work from [Quarkslab](https://blog.quarkslab.com/deobfuscation-recovering-an-ollvm-protected-program.html)! Unlike **MODeflattener** that solves CFF deobfuscation with a static approach, this project utilitizes Miasm's symbolic execution engine to execute and recover the original control flow. 
 
@@ -62,6 +63,9 @@ python unflattener -i <input file> -o <output file> -t <target function addresss
 # Deobfuscate a single function
 python unflattener -i ./samples/linux/CFF.bin -o ./samples/linux/deob_CFF.bin -t 0x80491A0
 python unflattener -i ./samples/win/CFF_win.exe -o ./samples/win/deob_CFF_win.bin -t 0x401600
+
+# Deobfuscate Android ARM64 binary
+python unflattener -i ./samples/android/libcff_arm64.so -o ./samples/android/deob_libcff_arm64.so -t 0x12345678
 
 # Deobfuscate a function and follows all of its calls
 python unflattener -i ./samples/linux/CFF_full.bin -o ./samples/linux/deob_CFF_full.bin -t 0x8049E00 -a

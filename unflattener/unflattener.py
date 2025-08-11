@@ -18,7 +18,7 @@ from miasm.arch.aarch64.regs import *
 from miasm.core.interval import interval
 from miasm.loader.elf_init import ELF
 from miasm.loader.pe_init import PE
-from binrewrite import BinaryRewriter
+from .binrewrite import BinaryRewriter
 
 def calc_flattening_score(asm_graph: AsmCFG) -> float:
     """Function to calculate flatenning score

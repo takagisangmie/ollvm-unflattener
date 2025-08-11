@@ -136,7 +136,8 @@ class BinaryRewriter:
                 for index, state_block_loc in enumerate(self.state_to_lockey_map[curr_state_val]):
                     state_block: AsmBlock = self.asmcfg.loc_key_to_block(state_block_loc)
                     
-                    if state_block.lines[-1].name == 'JMP':
+                    if state_block.lines[-1].name == 'JMP' or \
+                       (self.arch == 'aarch64l' and state_block.lines[-1].name == 'B'):
                         # delete the jump to dispatcher
                         del state_block.lines[-1]
                     
@@ -159,11 +160,13 @@ class BinaryRewriter:
                       
                     for instruction in state_block.lines:
                         instruction_str = str(instruction)
-                        if instruction.name == 'CALL':
+                        call_instructions = ['CALL'] if self.arch != 'aarch64l' else ['BL', 'BLR']
+                        if instruction.name in call_instructions:
                             # has to resolve the call destination from loc key
                             if isinstance(instruction.args[0], ExprLoc):
                                 call_dst = int(self.symbex_engine.eval_exprloc(instruction.args[0]))
-                                instruction_str = 'CALL {}'.format(hex(call_dst))
+                                call_instr = 'CALL' if self.arch != 'aarch64l' else 'BL'
+                                instruction_str = f'{call_instr} {hex(call_dst)}'
                         
                         # relocate the instruction
                         self.rewrite_instructions[curr_reloc_address] = RewriteInstruction(instruction_str, instruction.offset, curr_reloc_address)
