@@ -1,7 +1,7 @@
 from collections import defaultdict
 from miasm.core.asmblock import AsmCFG, AsmBlock
 from miasm.ir.symbexec import SymbolicExecutionEngine
-from keystone import Ks, KS_ARCH_X86, KS_MODE_32, KS_MODE_64
+from keystone import Ks, KS_ARCH_X86, KS_MODE_32, KS_MODE_64, KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN
 from miasm.expression.expression import ExprLoc
 import re
 
@@ -61,7 +61,8 @@ class RewriteInstruction:
         return result
  
 class BinaryRewriter:
-    JMP_INSTRUCTION_DEFAULT_LEN = 6
+    JMP_INSTRUCTION_DEFAULT_LEN = 6  # x86/x64 jump instruction length
+    ARM64_BRANCH_INSTRUCTION_LEN = 4  # ARM64 branch instruction length
     KS: Ks = None
     X64_RIP_REGEX_PATTERN = r'\[RIP [\+\-] 0x(\d|[A-F])+\]'
     
@@ -87,8 +88,13 @@ class BinaryRewriter:
             BinaryRewriter.KS = Ks(KS_ARCH_X86, KS_MODE_32)
         elif arch == 'x86_64':
             BinaryRewriter.KS = Ks(KS_ARCH_X86, KS_MODE_64)
+        elif arch == 'aarch64l':
+            BinaryRewriter.KS = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
+            self.arch = arch
         else:
             raise Exception('Not supported architecture')
+        
+        self.arch = arch
         
     def init_CFF_data(self, state_order_map: defaultdict, state_to_lockey_map: defaultdict, symbex_engine: SymbolicExecutionEngine):
         """Initialize CFF information needed to generate patch
@@ -135,10 +141,19 @@ class BinaryRewriter:
                         del state_block.lines[-1]
                     
                     if len(next_state_vals) == 2:
-                        # conditional block, delete CMOV instruction
+                        # conditional block, delete CMOV/CSEL instruction
                         for index, instruction in enumerate(state_block.lines):
-                            if 'CMOV' in instruction.name:
-                                cond_jump_type = instruction.name.replace('CMOV', 'J')
+                            if 'CMOV' in instruction.name or 'CSEL' in instruction.name:
+                                if self.arch == 'aarch64l':
+                                    # ARM64: convert CSEL condition to branch condition
+                                    if 'CSEL' in instruction.name:
+                                        # Extract condition from CSEL (e.g., CSEL X0, X1, X2, EQ -> B.EQ)
+                                        cond_jump_type = 'B.' + instruction.name.split('.')[-1] if '.' in instruction.name else 'B.EQ'
+                                    else:
+                                        cond_jump_type = 'B.EQ'  # default condition
+                                else:
+                                    # x86: convert CMOV to jump
+                                    cond_jump_type = instruction.name.replace('CMOV', 'J')
                                 del state_block.lines[index]
                                 break
                       
@@ -154,9 +169,13 @@ class BinaryRewriter:
                         self.rewrite_instructions[curr_reloc_address] = RewriteInstruction(instruction_str, instruction.offset, curr_reloc_address)
                             
                         self.reloc_map[instruction.offset] = curr_reloc_address
-                        if instruction_str[0] == 'J':
-                            # force JMP/JCC instruction to always have length 6
-                            curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
+                        if instruction_str[0] == 'J' or (self.arch == 'aarch64l' and instruction_str[0] == 'B'):
+                            # force JMP/JCC instruction to always have length 6 for x86/x64
+                            # force B/B.cond instruction to always have length 4 for ARM64
+                            if self.arch == 'aarch64l':
+                                curr_reloc_address += BinaryRewriter.ARM64_BRANCH_INSTRUCTION_LEN
+                            else:
+                                curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
                         else:
                             curr_reloc_address += len(self.rewrite_instructions[curr_reloc_address].asm)
                 
@@ -174,8 +193,12 @@ class BinaryRewriter:
                     
                     if jump_dst in self.rewrite_instructions:
                         # already written before, jump backward
-                        self.rewrite_instructions[curr_reloc_address] = RewriteInstruction('JMP {}'.format(hex(jump_dst)), -1, curr_reloc_address)
-                        curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
+                        jump_instr = 'JMP' if self.arch != 'aarch64l' else 'B'
+                        self.rewrite_instructions[curr_reloc_address] = RewriteInstruction(f'{jump_instr} {hex(jump_dst)}', -1, curr_reloc_address)
+                        if self.arch == 'aarch64l':
+                            curr_reloc_address += BinaryRewriter.ARM64_BRANCH_INSTRUCTION_LEN
+                        else:
+                            curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
                         
                     # else just write the next block directly after
                 elif len(next_state_vals) == 2:
@@ -191,7 +214,10 @@ class BinaryRewriter:
                     # old offset is -1 here cause we create this instruction out of thin air
                     # it does not exist in the original instruction
                     self.rewrite_instructions[curr_reloc_address] = RewriteInstruction('{} {}'.format(cond_jump_type, hex(false_dst)), -1, curr_reloc_address)
-                    curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
+                    if self.arch == 'aarch64l':
+                        curr_reloc_address += BinaryRewriter.ARM64_BRANCH_INSTRUCTION_LEN
+                    else:
+                        curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
                     
                     # stash the false state for later traversal
                     process_queue.append(false_state_val)
@@ -202,8 +228,12 @@ class BinaryRewriter:
                     
                     if true_dst in self.rewrite_instructions:
                         # true destination is already written, JMP backward
-                        self.rewrite_instructions[curr_reloc_address] = RewriteInstruction('JMP {}'.format(hex(true_dst)), -1, curr_reloc_address)
-                        curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
+                        jump_instr = 'JMP' if self.arch != 'aarch64l' else 'B'
+                        self.rewrite_instructions[curr_reloc_address] = RewriteInstruction(f'{jump_instr} {hex(true_dst)}', -1, curr_reloc_address)
+                        if self.arch == 'aarch64l':
+                            curr_reloc_address += BinaryRewriter.ARM64_BRANCH_INSTRUCTION_LEN
+                        else:
+                            curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
 
                     next_state_val = true_state_val
                 
@@ -213,8 +243,12 @@ class BinaryRewriter:
                     # gotta add a JMP to the head block of that state
                     next_state_head_loc = self.state_to_lockey_map[next_state_val][0]
                     jump_dst = self.asmcfg.loc_db.get_location_offset(next_state_head_loc)
-                    self.rewrite_instructions[curr_reloc_address] = RewriteInstruction('JMP {}'.format(hex(jump_dst)), -1, curr_reloc_address)
-                    curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
+                    jump_instr = 'JMP' if self.arch != 'aarch64l' else 'B'
+                    self.rewrite_instructions[curr_reloc_address] = RewriteInstruction(f'{jump_instr} {hex(jump_dst)}', -1, curr_reloc_address)
+                    if self.arch == 'aarch64l':
+                        curr_reloc_address += BinaryRewriter.ARM64_BRANCH_INSTRUCTION_LEN
+                    else:
+                        curr_reloc_address += BinaryRewriter.JMP_INSTRUCTION_DEFAULT_LEN
                     break
                 curr_state_val = next_state_val
                 
@@ -246,9 +280,10 @@ class BinaryRewriter:
                 
                 instruction_patch = bytes(instruction_encoding)
                 
-                # Adding NOPs in case the length is not 6
+                # Adding NOPs in case the length is not the expected default
                 # I do not wanna deal separating JMP near and JMP short here
-                instruction_patch += b'\x90' * (self.JMP_INSTRUCTION_DEFAULT_LEN - len(instruction_encoding))
+                expected_len = self.ARM64_BRANCH_INSTRUCTION_LEN if self.arch == 'aarch64l' else self.JMP_INSTRUCTION_DEFAULT_LEN
+                instruction_patch += b'\x90' * (expected_len - len(instruction_encoding))
             else:
                 instruction_patch = reloc_instruction.asm
                 

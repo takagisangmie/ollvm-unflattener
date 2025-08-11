@@ -14,6 +14,7 @@ from miasm.ir.symbexec import SymbolicExecutionEngine
 import graphviz
 from miasm.arch.x86.arch import instruction_x86, mn_x86
 from miasm.arch.x86.disasm import dis_x86_32
+from miasm.arch.aarch64.regs import *
 from miasm.core.interval import interval
 from miasm.loader.elf_init import ELF
 from miasm.loader.pe_init import PE
@@ -201,10 +202,12 @@ class Unflattener:
             backbone_blocks.append(last_predecessor_loc)
             
             # traverse upward from each backbone block to find all backbone blocks above it
-            # this is due to CALL instructions breaking up basic block into multiple ones
+            # this is due to CALL/BL instructions breaking up basic block into multiple ones
             while True:
                 curr_predecessor_block = self.asmcfg.loc_key_to_block(curr_predecessor_loc)
-                if curr_predecessor_block.lines[-1].name in ['JZ', 'JMP', 'JNZ']:
+                call_instr_names = ['CALL'] if self.container.arch != 'aarch64l' else ['BL', 'BLR']
+                if curr_predecessor_block.lines[-1].name in ['JZ', 'JMP', 'JNZ'] + \
+                   (['B.EQ', 'B.NE', 'B'] if self.container.arch == 'aarch64l' else []):
                     break
                 backbone_blocks.append(curr_predecessor_loc)
                 curr_predecessor_loc = self.asmcfg.predecessors(curr_predecessor_loc)[0]
@@ -216,12 +219,13 @@ class Unflattener:
                 backbone_blocks.append(last_tail_loc)
                 
                 # traverse upward from each backbone block to find all backbone blocks above it
-                # this is due to CALL instructions breaking up basic block into multiple ones
+                # this is due to CALL/BL instructions breaking up basic block into multiple ones
                 curr_predecessor_tail_loc = self.asmcfg.predecessors(last_tail_loc)[0]
                 while True:
                     
                     curr_predecessor_tail_block = self.asmcfg.loc_key_to_block(curr_predecessor_tail_loc)
-                    if curr_predecessor_tail_block.lines[-1].name in ['JZ', 'JMP', 'JNZ']:
+                    if curr_predecessor_tail_block.lines[-1].name in ['JZ', 'JMP', 'JNZ'] + \
+                       (['B.EQ', 'B.NE', 'B'] if self.container.arch == 'aarch64l' else []):
                         break
                     backbone_blocks.append(curr_predecessor_tail_loc)
                     curr_predecessor_tail_loc = self.asmcfg.predecessors(curr_predecessor_tail_loc)[0]
@@ -248,13 +252,14 @@ class Unflattener:
         cmov_instruction = None
         
         for instruction in curr_block.lines:
-            if instruction.name in ['CMP', 'TEST']:
+            if instruction.name in ['CMP', 'TEST', 'SUBS', 'CMP']:  # ARM64 comparison instructions
                 cmp_instruction = instruction
-            if 'CMOV' in instruction.name:
+            if 'CMOV' in instruction.name or 'CSEL' in instruction.name:  # ARM64 conditional select
                 cmov_instruction = instruction
                 break
         
-        if curr_block.lines[-1].name == 'CALL':
+        if curr_block.lines[-1].name == 'CALL' or \
+           (self.container.arch == 'aarch64l' and curr_block.lines[-1].name in ['BL', 'BLR']):
             # process call regularly but we reset RSP/RBP to old RSP/RBP instead 
             #   of an ExprMem depending on miasm's call_func_stack
             #   basically overwriting the execution result of the CALL IR instruction.
@@ -263,13 +268,24 @@ class Unflattener:
             original_rbp = symbex_engine.symbols[ExprId('RBP', 64)]
             original_esp = symbex_engine.symbols[ExprId('ESP', 32)]
             original_ebp = symbex_engine.symbols[ExprId('EBP', 32)]
+            # ARM64 stack pointer and frame pointer
+            original_sp = None
+            original_x29 = None
+            if self.container.arch == 'aarch64l':
+                original_sp = symbex_engine.symbols[ExprId('SP', 64)]
+                original_x29 = symbex_engine.symbols[ExprId('X29', 64)]
+            
             result = symbex_engine.run_block_at(self.ircfg, loc_key)
+            
             if self.container.arch == 'x86_32':
                 symbex_engine.symbols[ExprId('ESP', 32)] = original_esp
                 symbex_engine.symbols[ExprId('EBP', 32)] = original_ebp
             elif self.container.arch == 'x86_64':
                 symbex_engine.symbols[ExprId('RSP', 64)] = original_rsp
                 symbex_engine.symbols[ExprId('RBP', 64)] = original_rbp
+            elif self.container.arch == 'aarch64l':
+                symbex_engine.symbols[ExprId('SP', 64)] = original_sp
+                symbex_engine.symbols[ExprId('X29', 64)] = original_x29
             return result
          
         # is an ollvm condition block if CMP instruction is followed by CMOVCC instruction
@@ -286,8 +302,8 @@ class Unflattener:
                         return symbex_engine.run_block_at(self.ircfg, loc_key)
                     
                     for assign_block in curr_ir_block:
-                        # once found the IR assign block for the CMOV instruction
-                        if 'CMOV' in assign_block.instr.name:
+                        # once found the IR assign block for the CMOV/CSEL instruction
+                        if 'CMOV' in assign_block.instr.name or 'CSEL' in assign_block.instr.name:
                             # symbex the block as normal
                             symbex_engine.run_block_at(self.ircfg, curr_loc)
                             
@@ -299,15 +315,21 @@ class Unflattener:
                             #       so we have to get the ExprCond directly from the assign block
                             cmov_cond_expr = assign_block.values()[-1]
                             
-                            # example: CMOVNZ -> JNZ
-                            if 'CMOVN' in cmov_instruction.name:
+                            # Handle ARM64 CSEL conditions differently from x86 CMOV
+                            if self.container.arch == 'aarch64l':
+                                # ARM64 CSEL uses condition codes directly
                                 return cmov_cond_expr.copy()
-                            
-                            # example: CMOVZ -> JZ 
-                            # need to flip the condition src fields
-                            return ExprCond(cmov_cond_expr._cond.copy(),
-                                cmov_cond_expr._src2.copy(),
-                                cmov_cond_expr._src1.copy())
+                            else:
+                                # x86 CMOV handling
+                                # example: CMOVNZ -> JNZ
+                                if 'CMOVN' in cmov_instruction.name:
+                                    return cmov_cond_expr.copy()
+                                
+                                # example: CMOVZ -> JZ 
+                                # need to flip the condition src fields
+                                return ExprCond(cmov_cond_expr._cond.copy(),
+                                    cmov_cond_expr._src2.copy(),
+                                    cmov_cond_expr._src1.copy())
                     curr_loc = symbex_engine.run_block_at(self.ircfg, curr_loc)
                     continue
         else:
@@ -397,11 +419,12 @@ class Unflattener:
                     curr_state_val = None
                 
                 # for flatten while following calls
-                # if this block ends with a CALL, extract the call destination and add to self.flatten_func_queue
+                # if this block ends with a CALL/BL, extract the call destination and add to self.flatten_func_queue
                 curr_block = self.asmcfg.loc_key_to_block(curr_loc)
                 if curr_block is not None:
                     last_instruction = curr_block.lines[-1]
-                    if last_instruction.name == 'CALL':
+                    call_instructions = ['CALL'] if self.container.arch != 'aarch64l' else ['BL', 'BLR']
+                    if last_instruction.name in call_instructions:
                         destination_loc = symbex_engine.eval_expr(last_instruction.args[0])
                         
                         if isinstance(destination_loc, ExprInt):
